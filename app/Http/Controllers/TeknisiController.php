@@ -363,4 +363,76 @@ class TeknisiController extends Controller
             ])
             ->with('success', 'Pengecekan mesin berhasil dicatat.');
     }
+
+    /**
+     * Daftar notifikasi untuk teknisi yang sedang login.
+     *
+     * Laporan baru (belum ditangani) dan perubahan laporan
+     * yang sudah ditugaskan kepada teknisi ditampilkan sebagai notifikasi.
+     * Nilai notifikasi dibaca langsung dari database, tidak memakai sesi.
+     */
+    public function notifications()
+    {
+        $teknisiId = Auth::id();
+
+        $notifications = LaporanKerusakan::with(['mesin', 'operator'])
+            ->where(function ($query) use ($teknisiId) {
+                $query->where('status', 'Menunggu Ditangani')
+                    ->orWhere('teknisi_id', $teknisiId);
+            })
+            ->latest('updated_at')
+            ->limit(8)
+            ->get();
+
+        $unreadCount = LaporanKerusakan::where(function ($query) use ($teknisiId) {
+                $query->where('status', 'Menunggu Ditangani')
+                    ->orWhere(function ($assigned) use ($teknisiId) {
+                        $assigned->where('teknisi_id', $teknisiId)
+                            ->whereIn('status', [
+                                'Sedang Diperbaiki',
+                                'Selesai Diperbaiki',
+                            ]);
+                    });
+            })
+            ->where('created_at', '>=', now()->subDays(7))
+            ->count();
+
+        return response()->json([
+            'count' => $unreadCount,
+            'notifications' => $notifications->map(function ($item) {
+                return [
+                    'id' => $item->id,
+                    'title' => $item->judul,
+                    'machine' => $item->mesin->nama ?? 'Mesin tidak diketahui',
+                    'operator' => $item->operator->name ?? 'Operator',
+                    'status' => $item->status,
+                    'updated_at' => $item->updated_at?->diffForHumans(),
+                    'url' => route('teknisi.laporan.detail', $item->id),
+                ];
+            }),
+        ]);
+    }
+
+    /**
+     * Menandai notifikasi yang relevan sebagai sudah dibaca.
+     *
+     * Implementasi saat ini menyimpan waktu baca di session per teknisi.
+     * Ini tidak membutuhkan tabel/migrasi tambahan.
+     */
+    public function markNotificationsRead()
+    {
+        $teknisiId = Auth::id();
+
+        $latestUpdate = LaporanKerusakan::where(function ($query) use ($teknisiId) {
+                $query->where('status', 'Menunggu Ditangani')
+                    ->orWhere('teknisi_id', $teknisiId);
+            })
+            ->max('updated_at');
+
+        session([
+            'teknisi_notifications_read_at' => $latestUpdate,
+        ]);
+
+        return response()->json(['success' => true]);
+    }
 }
